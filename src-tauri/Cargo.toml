@@ -1,0 +1,55 @@
+[package]
+name = "todobar"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "todobar_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Banco local. `bundled` compila o SQLite junto do binário, então o app não
+# depende de `libsqlite3` do sistema e não quebra se o usuário trocar de distro.
+rusqlite = { version = "0.40", features = ["bundled"] }
+# Horário de conclusão: gravamos em Brasília (America/Sao_Paulo), que hoje é
+# UTC-03:00 e não observa horário de verão desde 2019. Usamos `chrono-tz` em
+# vez de fixar o offset, para a conversão seguir as regras da IANA.
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+
+# No Linux o tray do Tauri usa apenas StatusNotifierItem (D-Bus), protocolo que
+# não tem evento de botão direito e cujo menu é exibido pelo painel. Para ter o
+# comportamento nativo (esquerdo abre, direito abre menu) criamos um
+# GtkStatusIcon (XEmbed) via FFI. O gtk3 já é linkado pelo webkit2gtk, então
+# reaproveitamos a mesma lib sem custo extra.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk-sys = "0.18"
+gdk-sys = "0.18"
+gdk-pixbuf-sys = "0.18"
+gobject-sys = "0.18"
+glib-sys = "0.18"
+x11 = { version = "2", features = ["xlib"] }
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
