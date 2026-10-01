@@ -31,11 +31,12 @@ jobs:
           - platform: windows-latest
             args: ''
             rust-target: ''
-          # O macos-latest já é Apple Silicon; o macos-13 é o runner Intel.
+          # O macos-latest já é Apple Silicon. O macos-13 (Intel) foi retirado
+          # pelo GitHub em dez/2025; o rótulo Intel atual é macos-15-intel.
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             rust-target: aarch64-apple-darwin
-          - platform: macos-13
+          - platform: macos-15-intel
             args: '--target x86_64-apple-darwin'
             rust-target: x86_64-apple-darwin
 
