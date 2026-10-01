@@ -41,7 +41,11 @@ confirme **Abrir mesmo assim**. O arquivo `*.app.tar.gz` é a versão portátil.
 ## Uso
 
 - **Clique esquerdo** no ícone: mostra/esconde a janela
-- **Clique direito**: menu com **Abrir** e **Sair**
+- **Clique direito**: menu com **Abrir**, **Abrir ao inicializar** e **Sair**
+- **Abrir ao inicializar**: faz o app iniciar junto com o sistema (a janela
+  continua começando oculta, só o ícone aparece na bandeja). No Linux, prefira
+  instalar via `.deb`/`.rpm`; rodando pelo AppImage o caminho apontado é
+  temporário e some na próxima execução.
 - **`Esc`** ou clicar fora: esconde a janela
 - **`Ctrl+Q`**: encerra o app
 - Arraste a borda esquerda da janela para redimensionar (a largura é lembrada)

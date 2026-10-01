@@ -7,6 +7,9 @@ use tauri::{AppHandle, LogicalSize, Manager, WindowEvent};
 #[cfg(not(target_os = "linux"))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
+#[cfg(not(target_os = "linux"))]
+use tauri_plugin_autostart::ManagerExt;
+
 mod db;
 
 #[cfg(target_os = "linux")]
@@ -113,6 +116,32 @@ pub fn show_window(app: &AppHandle) {
     let _ = window.set_focus();
 }
 
+/// Liga/desliga o "Abrir ao inicializar" e sincroniza a marca do item de menu.
+///
+/// A marca é derivada do estado real do autostart em vez de uma alternância
+/// cega, então continua correta mesmo se a entrada for mexida por fora.
+#[cfg(not(target_os = "linux"))]
+fn toggle_autostart(app: &AppHandle, item: &tauri::menu::CheckMenuItem<tauri::Wry>) {
+    let autolaunch = app.autolaunch();
+    let enabled = autolaunch.is_enabled().unwrap_or(false);
+
+    let result = if enabled {
+        autolaunch.disable()
+    } else {
+        autolaunch.enable()
+    };
+
+    match result {
+        Ok(()) => {
+            let _ = item.set_checked(!enabled);
+        }
+        Err(e) => {
+            eprintln!("todo-taskbar: falha ao ajustar autostart: {e}");
+            let _ = item.set_checked(enabled);
+        }
+    }
+}
+
 /// Ancora a janela logo acima do ícone da bandeja, alinhada à borda direita
 /// dele. Se o painel não informar a posição do ícone, cai para o canto do
 /// monitor.
@@ -200,6 +229,10 @@ pub fn toggle_window(app: &AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![quit, set_width, load_state, save_state])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -225,8 +258,16 @@ pub fn run() {
             #[cfg(not(target_os = "linux"))]
             {
                 let open = tauri::menu::MenuItem::with_id(app, "open", "Abrir", true, None::<&str>)?;
+                let startup = tauri::menu::CheckMenuItem::with_id(
+                    app,
+                    "startup",
+                    "Abrir ao inicializar",
+                    true,
+                    app.autolaunch().is_enabled().unwrap_or(false),
+                    None::<&str>,
+                )?;
                 let quit = tauri::menu::MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
-                let menu = tauri::menu::Menu::with_items(app, &[&open, &quit])?;
+                let menu = tauri::menu::Menu::with_items(app, &[&open, &startup, &quit])?;
 
                 TrayIconBuilder::new()
                     .icon(app.default_window_icon().unwrap().clone())
@@ -237,9 +278,10 @@ pub fn run() {
                     // comportamento diferente do Linux. Aqui o esquerdo abre a
                     // janela e o direito abre o menu, igual ao XEmbed.
                     .show_menu_on_left_click(false)
-                    .on_menu_event(|app, event| match event.id.as_ref() {
+                    .on_menu_event(move |app, event| match event.id.as_ref() {
                         "open" => show_window(app),
                         "quit" => exit_app(app),
+                        "startup" => toggle_autostart(app, &startup),
                         _ => {}
                     })
                     .on_tray_icon_event(|tray, event| {

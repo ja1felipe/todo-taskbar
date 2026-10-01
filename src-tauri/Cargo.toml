@@ -25,6 +25,10 @@ tauri-build = { version = "2", features = [] }
 # habilita a janela transparente no macOS. Fora do macOS a feature é inerte.
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
+# "Abrir ao inicializar": cria/remove a entrada de autostart do sistema
+# (~/.config/autostart no Linux, chave de registro no Windows, LaunchAgent no
+# macOS).
+tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
