@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Permite gerar a release pela aba "Actions", sem precisar criar a tag antes.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag a publicar (ex.: v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      # Uma release por vez: builds paralelos competem pelo mesmo upload, então
+      # se o macOS falhar não queremos perder o Linux.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ''
+            rust-target: ''
+          - platform: windows-latest
+            args: ''
+            rust-target: ''
+          # O macos-latest já é Apple Silicon; o macos-13 é o runner Intel.
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+            rust-target: aarch64-apple-darwin
+          - platform: macos-13
+            args: '--target x86_64-apple-darwin'
+            rust-target: x86_64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # O tauri-action precisa do histórico para derivar a tag.
+          fetch-depth: 0
+
+      # WebKitGTK e GTK3 não vêm no runner. `libgtk-3-dev` é explícito porque o
+      # tray do Linux acessa o GtkStatusIcon via FFI, e não pelo crate `gtk` do
+      # Rust: sem isso o `gtk-sys` não acha os headers.
+      - name: Dependências de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf \
+            build-essential \
+            curl wget file
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: ${{ matrix.platform }}
+
+      - name: Dependências do frontend
+        run: npm ci
+
+      - name: Testes do banco
+        run: cargo test --manifest-path ./src-tauri/Cargo.toml
+
+      - name: Build e publicar
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: 'todobar ${{ inputs.tag || github.ref_name }}'
+          releaseBody: |
+            ## todobar ${{ inputs.tag || github.ref_name }}
+
+            Lista de tarefas no tray do sistema, com abas, banco SQLite e
+            registro de conclusão em horário de Brasília.
+
+            ### Linux
+            - `*.deb` — `sudo apt install ./todobar_0.1.0_amd64.deb`
+            - `*.AppImage` — dê permissão de execução e abra
+
+            Precisa de `libwebkit2gtk-4.1-0` e `libgtk-3-0` instalados.
+            No Ubuntu 22.04 ou inferior, use o pacote `libwebkit2gtk-4.0-dev`.
+
+            ### Windows
+            - `*-setup.exe` — instalador (NSIS)
+            - `*.msi` — instalador MSI
+
+            ### macOS
+            - `*.dmg` — arraste `todobar.app` para a pasta Aplicativos
+            - `*.app.tar.gz` — pacote portátil
+
+            Os artefatos não são assinados. No macOS, o Gatekeeper vai avisar:
+            *Ajustes do Sistema → Privacidade e Segurança → Abrir mesmo assim*.
+          args: ${{ matrix.args }}
+          releaseDraft: false
+          prerelease: false
+          # Sem chave de assinatura de update, não faz sentido gerar o manifesto.
+          includeUpdaterJson: false

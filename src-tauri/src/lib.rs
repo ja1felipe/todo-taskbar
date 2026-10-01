@@ -233,6 +233,11 @@ pub fn run() {
                     .icon(app.default_window_icon().unwrap().clone())
                     .tooltip("todobar")
                     .menu(&menu)
+                    // No Windows e no macOS o padrão é o menu abrir no clique
+                    // esquerdo, o que impediria o clique de alternar a janela —
+                    // comportamento diferente do Linux. Aqui o esquerdo abre a
+                    // janela e o direito abre o menu, igual ao XEmbed.
+                    .show_menu_on_left_click(false)
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "open" => show_window(app),
                         "quit" => exit_app(app),

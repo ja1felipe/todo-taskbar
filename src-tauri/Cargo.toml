@@ -1,9 +1,12 @@
 [package]
 name = "todobar"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Lista de tarefas na bandeja do sistema, com abas e histórico de conclusão"
+authors = ["João Felipe <ja1felipe@users.noreply.github.com>"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/ja1felipe/todo-taskbar"
+homepage = "https://github.com/ja1felipe/todo-taskbar"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -18,7 +21,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# `macos-private-api` é exigida pelo `macOSPrivateApi` do tauri.conf.json, que
+# habilita a janela transparente no macOS. Fora do macOS a feature é inerte.
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
