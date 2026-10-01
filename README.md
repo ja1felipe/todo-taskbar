@@ -1,4 +1,4 @@
-# todobar
+# Todo Taskbar
 
 Lista de tarefas na bandeja do sistema. Clique no ícone para abrir, adicione
 tarefas, organize em abas e conclua com um clique — o horário de conclusão fica
@@ -13,25 +13,25 @@ Pegue o instalador da sua plataforma na página de
 
 | Formato | Como instalar |
 | --- | --- |
-| `.deb` | `sudo apt install ./todobar_*_amd64.deb` |
-| `.AppImage` | `chmod +x todobar_*.AppImage && ./todobar_*.AppImage` |
+| `.deb` | `sudo apt install ./*.deb` |
+| `.AppImage` | `chmod +x ./*.AppImage && ./*.AppImage` |
 
 Dependências em tempo de execução: `libwebkit2gtk-4.1-0` e `libgtk-3-0`. No
 Ubuntu 22.04 ou inferior, o pacote disponível é o `libwebkit2gtk-4.0-dev`.
 
 O ícone na bandeja usa XEmbed, que é um protocolo de X11. Em sessões Wayland
 puras o ícone pode não aparecer; nesse caso rode com
-`GDK_BACKEND=x11 ./todobar`.
+`GDK_BACKEND=x11 todobar` (ou `GDK_BACKEND=x11 ./*.AppImage`).
 
 ### Windows
 
-Baixe `todobar_*_x64-setup.exe` (NSIS) ou o `.msi` e execute. O app fica na
+Baixe o instalador `*setup.exe` (NSIS) ou o `.msi` e execute. O app fica na
 bandeja; clique esquerdo abre a janela, clique direito mostra o menu com
 **Abrir** e **Sair**.
 
 ### macOS
 
-Baixe o `.dmg`, abra e arraste o `todobar.app` para a pasta Aplicativos.
+Baixe o `.dmg`, abra e arraste o `Todo Taskbar.app` para a pasta Aplicativos.
 
 Os artefatos não são assinados nem notarizados, então o Gatekeeper vai
 bloquear na primeira abertura. Para liberar: clique com o botão direito no app
@@ -54,7 +54,7 @@ O banco fica no diretório de dados do sistema, em `com.felipe.todobar/todobar.d
 
 ## Desenvolvimento
 
-Requisitos: Node 20+, Rust estável e as
+Requisitos: Node 22+, Rust estável e as
 [dependências do Tauri](https://tauri.app/start/prerequisites/).
 
 ```bash

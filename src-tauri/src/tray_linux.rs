@@ -132,7 +132,7 @@ struct TrayContext {
 pub fn create(app: &AppHandle) {
     let icon = unsafe { gtk_status_icon_new() };
     if icon.is_null() {
-        eprintln!("todobar: não foi possível criar o ícone de bandeja");
+        eprintln!("todo-taskbar: não foi possível criar o ícone de bandeja");
         return;
     }
 
@@ -142,12 +142,12 @@ pub fn create(app: &AppHandle) {
                 gtk_status_icon_set_from_pixbuf(icon, pixbuf);
                 g_object_unref(pixbuf as *mut GObject);
             },
-            None => eprintln!("todobar: não foi possível carregar o ícone"),
+            None => eprintln!("todo-taskbar: não foi possível carregar o ícone"),
         }
     }
 
     unsafe {
-        let tooltip = CString::new("todobar").expect("tooltip sem NUL");
+        let tooltip = CString::new("Todo Taskbar").expect("tooltip sem NUL");
         gtk_status_icon_set_tooltip_text(icon, tooltip.as_ptr());
         gtk_status_icon_set_visible(icon, 1);
     }

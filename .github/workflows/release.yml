@@ -92,15 +92,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: 'todobar ${{ inputs.tag || github.ref_name }}'
+          releaseName: 'Todo Taskbar ${{ inputs.tag || github.ref_name }}'
           releaseBody: |
-            ## todobar ${{ inputs.tag || github.ref_name }}
+            ## Todo Taskbar ${{ inputs.tag || github.ref_name }}
 
             Lista de tarefas no tray do sistema, com abas, banco SQLite e
             registro de conclusão em horário de Brasília.
 
             ### Linux
-            - `*.deb` — `sudo apt install ./todobar_0.1.0_amd64.deb`
+            - `*.deb` — `sudo apt install ./*.deb`
             - `*.AppImage` — dê permissão de execução e abra
 
             Precisa de `libwebkit2gtk-4.1-0` e `libgtk-3-0` instalados.
@@ -111,7 +111,7 @@ jobs:
             - `*.msi` — instalador MSI
 
             ### macOS
-            - `*.dmg` — arraste `todobar.app` para a pasta Aplicativos
+            - `*.dmg` — arraste o `Todo Taskbar.app` para a pasta Aplicativos
             - `*.app.tar.gz` — pacote portátil
 
             Os artefatos não são assinados. No macOS, o Gatekeeper vai avisar:

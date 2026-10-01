@@ -383,7 +383,7 @@
 
   <div class="content">
     <header>
-      <h1>{active?.name ?? "todobar"}</h1>
+      <h1>{active?.name ?? "Todo Taskbar"}</h1>
       <span class="count">{remaining} pendentes</span>
     </header>
 

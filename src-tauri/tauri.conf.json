@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "todobar",
+  "productName": "Todo Taskbar",
   "version": "0.1.0",
   "identifier": "com.felipe.todobar",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "todobar",
+        "title": "Todo Taskbar",
         "width": 380,
         "height": 520,
         "resizable": true,

@@ -230,7 +230,7 @@ pub fn run() {
 
                 TrayIconBuilder::new()
                     .icon(app.default_window_icon().unwrap().clone())
-                    .tooltip("todobar")
+                    .tooltip("Todo Taskbar")
                     .menu(&menu)
                     // No Windows e no macOS o padrão é o menu abrir no clique
                     // esquerdo, o que impediria o clique de alternar a janela —
