@@ -2,7 +2,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use rusqlite::Connection;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WindowEvent};
+use tauri::{AppHandle, LogicalSize, Manager, WindowEvent};
 
 #[cfg(not(target_os = "linux"))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -124,7 +124,7 @@ fn position_window(window: &tauri::WebviewWindow) {
         }
     }
 
-    position_near_corner(window);
+    position_in_work_area(window);
 }
 
 /// Posiciona a janela acima do ícone, com a borda direita alinhada à dele.
@@ -157,9 +157,13 @@ fn position_above_icon(
         .is_ok()
 }
 
-/// Ancora a janela no canto inferior direito do monitor (usado quando a posição
-/// do ícone não está disponível).
-fn position_near_corner(window: &tauri::WebviewWindow) {
+/// Ancora a janela no canto inferior direito da *área útil* do monitor (usado
+/// quando a posição do ícone não está disponível).
+///
+/// A área útil é a tela menos a barra de tarefas. Ancorar no tamanho total do
+/// monitor deixava a parte de baixo da janela embaixo da barra de tarefas no
+/// Windows — o botão de criar aba, por exemplo, ficava inalcançável.
+fn position_in_work_area(window: &tauri::WebviewWindow) {
     let Ok(Some(monitor)) = window.primary_monitor() else {
         return;
     };
@@ -168,21 +172,16 @@ fn position_near_corner(window: &tauri::WebviewWindow) {
         return;
     };
 
-    let scale = monitor.scale_factor();
-    let position = monitor.position();
-    let monitor_size = monitor.size();
+    // `work_area` e `inner_size` já estão em pixels físicos; só o GAP é lógico.
+    let area = monitor.work_area();
+    let gap = (GAP * monitor.scale_factor()).round() as i32;
 
-    let width = size.width as f64 / scale;
-    let height = size.height as f64 / scale;
-    let monitor_x = position.x as f64 / scale;
-    let monitor_y = position.y as f64 / scale;
-    let monitor_width = monitor_size.width as f64 / scale;
-    let monitor_height = monitor_size.height as f64 / scale;
+    let right = area.position.x + area.size.width as i32;
+    let bottom = area.position.y + area.size.height as i32;
+    let x = (right - size.width as i32 - gap).max(area.position.x);
+    let y = (bottom - size.height as i32 - gap).max(area.position.y);
 
-    let x = monitor_x + monitor_width - width - GAP;
-    let y = monitor_y + monitor_height - height - GAP;
-
-    let _ = window.set_position(LogicalPosition::new(x, y));
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
 pub fn toggle_window(app: &AppHandle) {
