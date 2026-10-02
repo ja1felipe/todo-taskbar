@@ -135,21 +135,19 @@ struct TrayContext {
 ///
 /// Precisa rodar na thread principal do GTK, que é onde o `tao` bomba o event
 /// loop no Linux.
-pub fn create(app: &AppHandle) {
+pub fn create(app: &AppHandle, image: &tauri::image::Image<'_>) {
     let icon = unsafe { gtk_status_icon_new() };
     if icon.is_null() {
         eprintln!("todo-taskbar: não foi possível criar o ícone de bandeja");
         return;
     }
 
-    if let Some(image) = app.default_window_icon() {
-        match load_pixbuf(image.rgba(), image.width(), image.height()) {
-            Some(pixbuf) => unsafe {
-                gtk_status_icon_set_from_pixbuf(icon, pixbuf);
-                g_object_unref(pixbuf as *mut GObject);
-            },
-            None => eprintln!("todo-taskbar: não foi possível carregar o ícone"),
-        }
+    match load_pixbuf(image.rgba(), image.width(), image.height()) {
+        Some(pixbuf) => unsafe {
+            gtk_status_icon_set_from_pixbuf(icon, pixbuf);
+            g_object_unref(pixbuf as *mut GObject);
+        },
+        None => eprintln!("todo-taskbar: não foi possível carregar o ícone"),
     }
 
     unsafe {

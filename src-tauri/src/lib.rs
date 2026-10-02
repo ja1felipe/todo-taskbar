@@ -88,6 +88,12 @@ fn can_self_update() -> bool {
     tauri::utils::platform::bundle_type().is_some()
 }
 
+/// Ícone da bandeja, embutido no binário a partir de `icons/newicon`. Fica
+/// separado do ícone do app/instalador (`bundle.icon` no `tauri.conf.json`).
+fn tray_icon_image() -> tauri::Result<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(include_bytes!("../icons/newicon/icon-256x256.png"))
+}
+
 /// Trava a altura e limita a largura a um quarto da tela, para a janela não
 /// virar uma faixa gigante em monitores largos.
 fn configure_resize(window: &tauri::WebviewWindow) {
@@ -270,11 +276,13 @@ pub fn run() {
             let conn = db::open(&path).map_err(|e| e.to_string())?;
             app.manage(DbState(Mutex::new(conn)));
 
+            let tray_icon = tray_icon_image()?;
+
             // No Linux usamos XEmbed (GtkStatusIcon) via FFI, porque o tray do
             // Tauri é StatusNotifierItem: sem menu o ícone não aparece e não há
             // como receber o botão direito.
             #[cfg(target_os = "linux")]
-            tray_linux::create(app.handle());
+            tray_linux::create(app.handle(), &tray_icon);
 
             #[cfg(not(target_os = "linux"))]
             {
@@ -291,7 +299,7 @@ pub fn run() {
                 let menu = tauri::menu::Menu::with_items(app, &[&open, &startup, &quit])?;
 
                 TrayIconBuilder::new()
-                    .icon(app.default_window_icon().unwrap().clone())
+                    .icon(tray_icon.clone())
                     .tooltip("Todo Taskbar")
                     .menu(&menu)
                     // No Windows e no macOS o padrão é o menu abrir no clique
@@ -362,4 +370,19 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tray_icon_image;
+
+    /// O PNG da bandeja é embutido e decodificado em runtime; se sumir ou mudar
+    /// de formato, o setup do app falharia. O teste avisa antes.
+    #[test]
+    fn tray_icon_decodes() {
+        let icon = tray_icon_image().expect("PNG da bandeja deve decodificar");
+        assert_eq!(icon.width(), 256);
+        assert_eq!(icon.height(), 256);
+        assert_eq!(icon.rgba().len(), 256 * 256 * 4);
+    }
 }
