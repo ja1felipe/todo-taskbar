@@ -1,7 +1,10 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+  import { check, type Update } from "@tauri-apps/plugin-updater";
+  import { relaunch } from "@tauri-apps/plugin-process";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import Section from "$lib/Section.svelte";
   import TodoItem from "$lib/TodoItem.svelte";
 
@@ -48,6 +51,21 @@
   let editing = $state<number | "new" | null>(null);
   let draft = $state("");
 
+  const RELEASES_URL = "https://github.com/ja1felipe/todo-taskbar/releases/latest";
+  const UPDATE_INTERVAL = 6 * 60 * 60 * 1000;
+
+  type UpdateStatus = "idle" | "available" | "downloading" | "installing" | "error";
+
+  let updateStatus = $state<UpdateStatus>("idle");
+  let updateVersion = $state("");
+  // -1 quando o servidor não informa o tamanho total do download.
+  let updateProgress = $state(-1);
+  let updateMessage = $state("");
+  let checking = $state(false);
+  let canSelfUpdate = $state(false);
+  let pendingUpdate: Update | null = null;
+  let updateTimer: ReturnType<typeof setInterval> | undefined;
+
   let active = $derived(tabs.find((t) => t.id === activeId) ?? tabs[0]);
   let pending = $derived(active?.todos.filter((t) => !t.done) ?? []);
   let finished = $derived(active?.todos.filter((t) => t.done) ?? []);
@@ -76,6 +94,15 @@
 
     await restoreWidth();
     await trackWidth();
+
+    canSelfUpdate = await invoke<boolean>("can_self_update").catch(() => false);
+    void checkForUpdates();
+    updateTimer = setInterval(() => void checkForUpdates(), UPDATE_INTERVAL);
+  });
+
+  onDestroy(() => {
+    if (updateTimer) clearInterval(updateTimer);
+    void pendingUpdate?.close();
   });
 
   /**
@@ -343,6 +370,71 @@
     grip.addEventListener("pointercancel", stop);
   }
 
+  /**
+   * Consulta o endpoint configurado no updater. Erros de rede são silenciosos:
+   * estar offline não deve virar alerta na tela.
+   */
+  async function checkForUpdates() {
+    if (checking || updateStatus === "downloading" || updateStatus === "installing") return;
+    checking = true;
+    try {
+      const update = await check();
+      if (update) {
+        await pendingUpdate?.close();
+        pendingUpdate = update;
+        updateVersion = update.version;
+        updateStatus = "available";
+      } else if (updateStatus === "available") {
+        updateStatus = "idle";
+      }
+    } catch (error) {
+      console.error("não foi possível verificar atualizações", error);
+    } finally {
+      checking = false;
+    }
+  }
+
+  /** Baixa e instala a atualização pendente, mostrando o progresso. */
+  async function installUpdate() {
+    const update = pendingUpdate;
+    if (!update) return;
+
+    updateStatus = "downloading";
+    updateProgress = -1;
+    let total = 0;
+    let received = 0;
+
+    try {
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? 0;
+          updateProgress = total > 0 ? 0 : -1;
+        } else if (event.event === "Progress") {
+          received += event.data.chunkLength;
+          if (total > 0) updateProgress = received / total;
+        } else if (event.event === "Finished") {
+          updateStatus = "installing";
+        }
+      });
+
+      // No Windows o instalador assume e encerra o app sozinho; no Linux e no
+      // macOS é preciso relançar para subir na versão nova.
+      await relaunch();
+    } catch (error) {
+      console.error("falha ao atualizar", error);
+      updateMessage = "Não foi possível atualizar automaticamente nesta instalação.";
+      updateStatus = "error";
+    }
+  }
+
+  function openReleases() {
+    void openUrl(RELEASES_URL);
+  }
+
+  function dismissUpdate() {
+    updateStatus = "idle";
+  }
+
   function hide() {
     appWindow.hide();
   }
@@ -382,6 +474,36 @@
   ></div>
 
   <div class="content">
+    {#if updateStatus !== "idle"}
+      <div class="update" class:update-problem={updateStatus === "error"} role="status">
+        {#if updateStatus === "available"}
+          <span class="update-text">
+            Nova versão {updateVersion} disponível{#if !canSelfUpdate} — baixe manualmente{/if}.
+          </span>
+          <button class="update-action" onclick={canSelfUpdate ? installUpdate : openReleases}>
+            {canSelfUpdate ? "Atualizar" : "Baixar"}
+          </button>
+          <button class="update-close" aria-label="Dispensar" onclick={dismissUpdate}>
+            &times;
+          </button>
+        {:else if updateStatus === "downloading"}
+          <span class="update-text">
+            Baixando atualização{updateProgress >= 0
+              ? ` — ${Math.round(updateProgress * 100)}%`
+              : "…"}
+          </span>
+        {:else if updateStatus === "installing"}
+          <span class="update-text">Instalando… o app vai reiniciar.</span>
+        {:else if updateStatus === "error"}
+          <span class="update-text">{updateMessage}</span>
+          <button class="update-action" onclick={openReleases}>Baixar</button>
+          <button class="update-close" aria-label="Dispensar" onclick={dismissUpdate}>
+            &times;
+          </button>
+        {/if}
+      </div>
+    {/if}
+
     <header>
       <h1>{active?.name ?? "Todo Taskbar"}</h1>
       <span class="count">{remaining} pendentes</span>
@@ -416,7 +538,12 @@
 
     <footer>
       <span>{active?.todos.length ?? 0} no total</span>
-      <button class="quit" onclick={() => invoke("quit")}>Sair</button>
+      <span class="footer-links">
+        <button class="check" onclick={checkForUpdates} disabled={checking}>
+          {checking ? "verificando…" : "verificar"}
+        </button>
+        <button class="quit" onclick={() => invoke("quit")}>Sair</button>
+      </span>
     </footer>
   </div>
 
@@ -568,6 +695,63 @@
     padding-right: var(--pad);
   }
 
+  /* Faixa de atualização disponível, no topo do conteúdo. */
+  .update {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.42rem 0.5rem;
+    border-radius: 0.4rem;
+    background: #1f3350;
+    border: 1px solid #2f5a8f;
+    color: #d3e3ff;
+    font-size: 0.78rem;
+  }
+
+  .update-problem {
+    background: #3a2626;
+    border-color: #6b3a3a;
+    color: #ffd9d9;
+  }
+
+  .update-text {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.3;
+  }
+
+  .update-action {
+    flex-shrink: 0;
+    padding: 0.22rem 0.5rem;
+    border: none;
+    border-radius: 0.3rem;
+    background: #4a8cff;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .update-action:hover {
+    background: #5f9bff;
+  }
+
+  .update-close {
+    flex-shrink: 0;
+    padding: 0 0.1rem;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 0.95rem;
+    line-height: 1;
+    opacity: 0.7;
+    cursor: pointer;
+  }
+
+  .update-close:hover {
+    opacity: 1;
+  }
+
   header {
     display: flex;
     align-items: center;
@@ -670,6 +854,30 @@
 
   .clear:disabled {
     opacity: 0.35;
+    cursor: default;
+  }
+
+  .footer-links {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  .check {
+    border: none;
+    background: transparent;
+    color: #6e6e76;
+    font-size: 0.72rem;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .check:hover:not(:disabled) {
+    color: #e8e8ea;
+  }
+
+  .check:disabled {
+    opacity: 0.6;
     cursor: default;
   }
 

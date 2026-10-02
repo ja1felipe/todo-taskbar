@@ -56,6 +56,19 @@ O banco fica no diretório de dados do sistema, em `com.felipe.todobar/todobar.d
 - Windows: `%APPDATA%\com.felipe.todobar\todobar.db`
 - macOS: `~/Library/Application Support/com.felipe.todobar/todobar.db`
 
+## Atualizações
+
+O app consulta a última release ao iniciar e a cada 6 horas. Quando há versão
+nova, aparece uma faixa no topo com o botão **Atualizar**, que baixa e instala
+a atualização. Também dá para forçar a checagem pelo link **verificar** no
+rodapé.
+
+- **Windows** e **macOS**: atualizam direto, sem intervenção.
+- **Linux (AppImage)**: atualiza direto, sem senha.
+- **Linux (.deb/.rpm)**: o updater chama `dpkg`/`rpm` e pede a senha de
+  administrador (via `pkexec`/`zenity`). Em builds de desenvolvimento, que não
+  pertencem a nenhum pacote, o botão vira **Baixar** e abre a página da release.
+
 ## Desenvolvimento
 
 Requisitos: Node 22+, Rust estável e as
@@ -66,9 +79,11 @@ npm install
 npm run tauri dev
 ```
 
-Para gerar o instalador local:
+Para gerar o instalador local. Como `createUpdaterArtifacts` está ligado, o
+build exige a chave privada do updater (mesmo para uso local):
 
 ```bash
+export TAURI_SIGNING_PRIVATE_KEY=~/.tauri/todobar.key
 npm run tauri build
 ```
 
@@ -93,12 +108,24 @@ Para publicar uma versão:
 2. Crie e envie a tag:
 
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
 3. O workflow roda sozinho e cria a release. Para disparar manualmente, use
    **Actions → Release → Run workflow** informando a tag.
+
+### Segredos do repositório
+
+O updater assina as atualizações com um par de chaves (geradas uma vez com
+`npx tauri signer generate -w ~/.tauri/todobar.key`). Configure em
+**Settings → Secrets and variables → Actions**:
+
+- `TAURI_SIGNING_PRIVATE_KEY` — conteúdo de `~/.tauri/todobar.key`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — senha da chave (em branco se não houver)
+
+Guarde a chave privada em local seguro: perdê-la impede que as instalações já
+existentes recebam atualizações futuras.
 
 Para publicar como rascunho (revisar os artefatos antes de tornar público),
 troque `releaseDraft: false` por `true` em `.github/workflows/release.yml`.

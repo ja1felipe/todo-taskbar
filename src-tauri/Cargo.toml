@@ -1,6 +1,6 @@
 [package]
 name = "todobar"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lista de tarefas na bandeja do sistema, com abas e histórico de conclusão"
 authors = ["João Felipe <ja1felipe@users.noreply.github.com>"]
 edition = "2021"
@@ -29,6 +29,11 @@ tauri-plugin-opener = "2"
 # (~/.config/autostart no Linux, chave de registro no Windows, LaunchAgent no
 # macOS).
 tauri-plugin-autostart = "2"
+# Atualização in-app: consulta o `latest.json` da última release, baixa o
+# pacote assinado e instala.
+tauri-plugin-updater = "2"
+# Necessário para relançar o app depois de instalar a atualização.
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

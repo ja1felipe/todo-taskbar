@@ -90,6 +90,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Conteúdo de `~/.tauri/todobar.key`. Sem ela o build falha, porque
+          # `createUpdaterArtifacts` está ligado no tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: 'Todo Taskbar ${{ inputs.tag || github.ref_name }}'
@@ -100,24 +104,26 @@ jobs:
             registro de conclusão em horário de Brasília.
 
             ### Linux
-            - `*.deb` — `sudo apt install ./*.deb`
-            - `*.AppImage` — dê permissão de execução e abra
+            - `*.deb` — `sudo apt install ./*.deb` (atualiza sozinho, pedindo senha)
+            - `*.AppImage` — dê permissão de execução e abra (atualiza sozinho)
 
             Precisa de `libwebkit2gtk-4.1-0` e `libgtk-3-0` instalados.
             No Ubuntu 22.04 ou inferior, use o pacote `libwebkit2gtk-4.0-dev`.
 
             ### Windows
-            - `*-setup.exe` — instalador (NSIS)
+            - `*-setup.exe` — instalador (NSIS), atualiza sozinho
             - `*.msi` — instalador MSI
 
             ### macOS
             - `*.dmg` — arraste o `Todo Taskbar.app` para a pasta Aplicativos
             - `*.app.tar.gz` — pacote portátil
 
-            Os artefatos não são assinados. No macOS, o Gatekeeper vai avisar:
-            *Ajustes do Sistema → Privacidade e Segurança → Abrir mesmo assim*.
+            Os instaladores não têm assinatura de plataforma (certificado de
+            desenvolvedor). No macOS, o Gatekeeper vai avisar: *Ajustes do
+            Sistema → Privacidade e Segurança → Abrir mesmo assim*. As
+            atualizações automáticas usam assinatura própria do app.
           args: ${{ matrix.args }}
           releaseDraft: false
           prerelease: false
-          # Sem chave de assinatura de update, não faz sentido gerar o manifesto.
-          includeUpdaterJson: false
+          # Gera o latest.json que o updater in-app consulta.
+          includeUpdaterJson: true

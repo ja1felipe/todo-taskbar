@@ -75,6 +75,19 @@ fn set_width(app: AppHandle, width: u32) {
 
 }
 
+/// Diz se esta instalação consegue se auto-atualizar.
+///
+/// O updater grava no binário o tipo de pacote (`bundle_type`) em que ele foi
+/// distribuído. Em desenvolvimento o binário não pertence a nenhum pacote e a
+/// atualização sobrescreveria o próprio executável em execução, então só
+/// liberamos quando há um bundle conhecido: AppImage no Linux (sem senha) e
+/// `.deb`/`.rpm` (pede senha de administrador via pkexec/zenity), `.msi`/`.exe`
+/// no Windows e `.app` no macOS.
+#[tauri::command]
+fn can_self_update() -> bool {
+    tauri::utils::platform::bundle_type().is_some()
+}
+
 /// Trava a altura e limita a largura a um quarto da tela, para a janela não
 /// virar uma faixa gigante em monitores largos.
 fn configure_resize(window: &tauri::WebviewWindow) {
@@ -233,7 +246,15 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .invoke_handler(tauri::generate_handler![quit, set_width, load_state, save_state])
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            quit,
+            set_width,
+            can_self_update,
+            load_state,
+            save_state
+        ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 configure_resize(&window);
