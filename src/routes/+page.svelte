@@ -323,6 +323,11 @@
     mapActiveTodos((todos) => todos.filter((t) => !t.done));
   }
 
+  /** Desmarca todas as concluídas, devolvendo-as para a lista em aberto. */
+  function uncheckAllDone() {
+    mapActiveTodos((todos) => todos.map((t) => (t.done ? { ...t, done: false } : t)));
+  }
+
   function autofocus(node: HTMLInputElement) {
     node.focus();
     node.select();
@@ -525,6 +530,9 @@
 
       <Section title="Finalizadas" count={finished.length} bind:open={openDone}>
         {#snippet actions()}
+          <button class="clear" onclick={uncheckAllDone} disabled={finished.length === 0}>
+            desmarcar tudo
+          </button>
           <button class="clear" onclick={clearDone} disabled={finished.length === 0}>limpar</button>
         {/snippet}
 

@@ -118,6 +118,7 @@
   .actions {
     display: flex;
     align-items: center;
+    gap: 0.15rem;
   }
 
   ul {
