@@ -38,6 +38,9 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# UUID v4 para identificar cada item entre dispositivos. O `id` inteiro local
+# continua sendo a identidade que o frontend já conhece.
+uuid = { version = "1", features = ["v4"] }
 
 # Banco local. `bundled` compila o SQLite junto do binário, então o app não
 # depende de `libsqlite3` do sistema e não quebra se o usuário trocar de distro.
