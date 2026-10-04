@@ -94,6 +94,11 @@ jobs:
           # `createUpdaterArtifacts` está ligado no tauri.conf.json.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Embutidos em tempo de compilação via `option_env!` no supabase.rs.
+          # São públicos (a `anon key` é protegida pelo RLS); por isso ficam em
+          # Variables, não em Secrets. Sem eles o app sai sem sync.
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: 'Todo Taskbar ${{ inputs.tag || github.ref_name }}'
