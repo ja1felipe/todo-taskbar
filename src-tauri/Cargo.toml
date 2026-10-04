@@ -42,6 +42,14 @@ serde_json = "1"
 # continua sendo a identidade que o frontend já conhece.
 uuid = { version = "1", features = ["v4"] }
 
+# Cliente HTTP para o Supabase (GoTrue/PostgREST). `rustls-tls` evita depender
+# do OpenSSL do sistema, o que facilita o build multiplataforma (e o Android no
+# futuro).
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+# Carrega o `.env` em desenvolvimento, para as credenciais não ficarem embutidas
+# no binário.
+dotenvy = "0.15"
+
 # Banco local. `bundled` compila o SQLite junto do binário, então o app não
 # depende de `libsqlite3` do sistema e não quebra se o usuário trocar de distro.
 rusqlite = { version = "0.40", features = ["bundled"] }

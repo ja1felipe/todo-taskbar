@@ -5,6 +5,7 @@
   import { check, type Update } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { openUrl } from "@tauri-apps/plugin-opener";
+  import { createClient, type SupabaseClient, type RealtimeChannel } from "@supabase/supabase-js";
   import Section from "$lib/Section.svelte";
   import TodoItem from "$lib/TodoItem.svelte";
 
@@ -26,6 +27,20 @@
   type Store = {
     tabs: Tab[];
     activeId: number;
+  };
+
+  /** Conta conectada; `email` pode faltar se o provedor não fornecer. */
+  type AuthInfo = {
+    userId: string;
+    email: string | null;
+  };
+
+  /** Dados do canal de Realtime entregues pelo backend. */
+  type RealtimeConfig = {
+    url: string;
+    anon: string;
+    accessToken: string;
+    userId: string;
   };
 
   const MAX_TABS = 5;
@@ -53,6 +68,7 @@
 
   const RELEASES_URL = "https://github.com/ja1felipe/todo-taskbar/releases/latest";
   const UPDATE_INTERVAL = 6 * 60 * 60 * 1000;
+  const SYNC_INTERVAL = 15 * 60 * 1000;
 
   type UpdateStatus = "idle" | "available" | "downloading" | "installing" | "error";
 
@@ -66,6 +82,26 @@
   let pendingUpdate: Update | null = null;
   let updateTimer: ReturnType<typeof setInterval> | undefined;
 
+  // Sincronização (Supabase). `auth` nulo = sem conta conectada.
+  let auth = $state<AuthInfo | null>(null);
+  let showLogin = $state(false);
+  let loginEmail = $state("");
+  let loginPassword = $state("");
+  let loginError = $state("");
+  let signingIn = $state(false);
+  let syncing = $state(false);
+  let syncNote = $state("");
+  let syncError = $state(false);
+  let syncTimer: ReturnType<typeof setInterval> | undefined;
+  let unlistenFocus: (() => void) | undefined;
+  // Canal de Realtime e client do Supabase usados só para receber avisos de
+  // mudança; quem fala com o banco local continua sendo o Rust.
+  let supa: SupabaseClient | null = null;
+  let channel: RealtimeChannel | null = null;
+  let realtimeUserId: string | null = null;
+  let syncQueued = false;
+  let syncDebounce: ReturnType<typeof setTimeout> | undefined;
+
   let active = $derived(tabs.find((t) => t.id === activeId) ?? tabs[0]);
   let pending = $derived(active?.todos.filter((t) => !t.done) ?? []);
   let finished = $derived(active?.todos.filter((t) => t.done) ?? []);
@@ -76,13 +112,14 @@
   onMount(async () => {
     const fromDb = await invoke<Store>("load_state").catch(() => null);
 
+    let imported: Store | null = null;
     if (fromDb?.tabs?.length) {
       tabs = fromDb.tabs;
       activeId = fromDb.activeId;
     } else {
       // Primeira execução com o banco: o que houver no `localStorage` vira a
       // carga inicial, para ninguém perder o que já estava cadastrado.
-      const imported = importFromLocalStorage();
+      imported = importFromLocalStorage();
       if (imported) {
         tabs = imported.tabs;
         activeId = imported.activeId;
@@ -90,7 +127,11 @@
     }
 
     ready = true;
-    void persist();
+    // Só grava na primeira execução se veio algo do `localStorage`. Um banco
+    // vazio fica vazio: a aba "Tarefas" padrão existe só na tela até o usuário
+    // criar algo (ou o sync trazer dados), senão ela viraria uma aba órfã
+    // duplicada no primeiro sync com outro dispositivo.
+    if (imported) void persist();
 
     await restoreWidth();
     await trackWidth();
@@ -98,10 +139,23 @@
     canSelfUpdate = await invoke<boolean>("can_self_update").catch(() => false);
     void checkForUpdates();
     updateTimer = setInterval(() => void checkForUpdates(), UPDATE_INTERVAL);
+
+    // Sem conta conectada nada acontece; `syncNow` já ignora esse caso.
+    await refreshAuth();
+    void setupRealtime();
+    void syncNow();
+    unlistenFocus = await appWindow.onFocusChanged(({ payload: focused }) => {
+      if (focused) void syncNow();
+    });
+    syncTimer = setInterval(() => void syncNow(), SYNC_INTERVAL);
   });
 
   onDestroy(() => {
     if (updateTimer) clearInterval(updateTimer);
+    if (syncTimer) clearInterval(syncTimer);
+    if (syncDebounce) clearTimeout(syncDebounce);
+    unlistenFocus?.();
+    void teardownRealtime();
     void pendingUpdate?.close();
   });
 
@@ -440,6 +494,147 @@
     updateStatus = "idle";
   }
 
+  async function refreshAuth() {
+    auth = await invoke<AuthInfo | null>("auth_status").catch(() => null);
+  }
+
+  /**
+   * Espera a fila de gravações locais antes de sincronizar: o merge lê o banco e
+   * não pode rodar no meio de um `save_state` ainda em voo.
+   */
+  async function syncNow() {
+    if (!auth) return;
+    // Se um sync já está rodando, marca para repetir ao terminar: um aviso de
+    // Realtime que chega no meio de um ciclo não pode ser perdido.
+    if (syncing) {
+      syncQueued = true;
+      return;
+    }
+    syncing = true;
+    syncError = false;
+    try {
+      await fila;
+      await invoke("sync_now");
+      // O merge pode ter trazido mudanças, então a tela recarrega do banco.
+      const fromDb = await invoke<Store>("load_state");
+      if (fromDb?.tabs?.length) {
+        tabs = fromDb.tabs;
+        activeId = fromDb.activeId;
+      }
+      syncNote = "sincronizado";
+    } catch (error) {
+      console.error("não foi possível sincronizar", error);
+      syncError = true;
+      syncNote = "falha ao sincronizar";
+    } finally {
+      syncing = false;
+      // O Rust é quem renova o token; o canal precisa receber o mais recente.
+      void setupRealtime();
+      setTimeout(() => {
+        if (!syncError) syncNote = "";
+      }, 2500);
+    }
+    if (syncQueued) {
+      syncQueued = false;
+      void syncNow();
+    }
+  }
+
+  /**
+   * Abre (ou atualiza) o canal de Realtime do usuário. Não é ele que grava
+   * nada: cada evento apenas dispara um sync, que faz o pull+merge de verdade.
+   * O `postgres_changes` respeita as políticas de RLS pelo token informado.
+   */
+  async function setupRealtime() {
+    const cfg = await invoke<RealtimeConfig | null>("realtime_config").catch(() => null);
+    if (!cfg) {
+      await teardownRealtime();
+      return;
+    }
+
+    if (!supa) {
+      // O Supabase aqui só serve para o canal: nada de sessão nem refresh de
+      // token no JS, para não competir com o refresh que o Rust já faz.
+      supa = createClient(cfg.url, cfg.anon, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+    }
+    await supa.realtime.setAuth(cfg.accessToken);
+
+    if (channel && realtimeUserId === cfg.userId) return;
+
+    if (channel) {
+      await supa.removeChannel(channel);
+      channel = null;
+    }
+
+    channel = supa
+      .channel(`todo-taskbar:${cfg.userId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tabs" }, scheduleSync)
+      .on("postgres_changes", { event: "*", schema: "public", table: "todos" }, scheduleSync)
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.warn("canal de realtime indisponível", status);
+        }
+      });
+    realtimeUserId = cfg.userId;
+  }
+
+  async function teardownRealtime() {
+    if (supa && channel) await supa.removeChannel(channel);
+    channel = null;
+    realtimeUserId = null;
+  }
+
+  /** Vários eventos seguidos viram um único sync (ex.: salvar uma tarefa mexe
+   *  na aba e no TODO, e o eco do nosso próprio push também chega). */
+  function scheduleSync() {
+    if (syncDebounce) clearTimeout(syncDebounce);
+    syncDebounce = setTimeout(() => {
+      syncDebounce = undefined;
+      void syncNow();
+    }, 400);
+  }
+
+
+  function openLogin() {
+    loginError = "";
+    showLogin = true;
+  }
+
+  function closeLogin() {
+    showLogin = false;
+    loginPassword = "";
+    loginError = "";
+  }
+
+  async function submitLogin(event: SubmitEvent) {
+    event.preventDefault();
+    if (signingIn) return;
+    signingIn = true;
+    loginError = "";
+    try {
+      auth = await invoke<AuthInfo>("sign_in", {
+        email: loginEmail.trim(),
+        password: loginPassword,
+      });
+      closeLogin();
+      await syncNow();
+    } catch (error) {
+      loginError = typeof error === "string" ? error : "não foi possível entrar";
+    } finally {
+      signingIn = false;
+    }
+  }
+
+  async function signOut() {
+    await invoke("sign_out").catch(() => {});
+    await teardownRealtime();
+    auth = null;
+    syncNote = "";
+    syncError = false;
+  }
+
   function hide() {
     appWindow.hide();
   }
@@ -448,7 +643,8 @@
     if (event.key === "Escape") {
       event.preventDefault();
       // Durante a edição o Escape cancela em vez de fechar a janela.
-      if (isEditing) cancelEdit();
+      if (showLogin) closeLogin();
+      else if (isEditing) cancelEdit();
       else hide();
       return;
     }
@@ -547,6 +743,20 @@
     <footer>
       <span>{active?.todos.length ?? 0} no total</span>
       <span class="footer-links">
+        {#if auth}
+          <button
+            class="check"
+            class:sync-error={syncError}
+            onclick={syncNow}
+            disabled={syncing}
+            title={auth.email ?? auth.userId}
+          >
+            {syncing ? "sincronizando…" : syncNote || "sincronizar"}
+          </button>
+          <button class="check" onclick={signOut}>desconectar</button>
+        {:else}
+          <button class="check" onclick={openLogin}>entrar</button>
+        {/if}
         <button class="check" onclick={checkForUpdates} disabled={checking}>
           {checking ? "verificando…" : "verificar"}
         </button>
@@ -554,6 +764,34 @@
       </span>
     </footer>
   </div>
+
+  {#if showLogin}
+    <form class="login" onsubmit={submitLogin}>
+      <label for="login-email">Entrar para sincronizar</label>
+      <input
+        id="login-email"
+        type="email"
+        bind:value={loginEmail}
+        placeholder="email"
+        autocomplete="username"
+      />
+      <input
+        type="password"
+        bind:value={loginPassword}
+        placeholder="senha"
+        autocomplete="current-password"
+      />
+      {#if loginError}
+        <small class="login-error">{loginError}</small>
+      {/if}
+      <div class="login-actions">
+        <button type="button" onclick={closeLogin}>Cancelar</button>
+        <button type="submit" disabled={signingIn || !loginEmail || !loginPassword}>
+          {signingIn ? "Entrando…" : "Entrar"}
+        </button>
+      </div>
+    </form>
+  {/if}
 
   <nav class="tabs" aria-label="Abas">
     {#each tabs as tab (tab.id)}
@@ -868,7 +1106,13 @@
   .footer-links {
     display: flex;
     align-items: center;
-    gap: 0.55rem;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 0.2rem 0.55rem;
+  }
+
+  .check.sync-error {
+    color: #ff9d9d;
   }
 
   .check {
@@ -1065,5 +1309,82 @@
   .tab-edit small {
     font-size: 0.68rem;
     color: #6e6e76;
+  }
+
+  /* Popover de login, centralizado sobre o conteúdo. */
+  .login {
+    position: absolute;
+    left: 50%;
+    bottom: 3.6rem;
+    z-index: 3;
+    transform: translateX(-50%);
+    width: min(14rem, calc(100% - 5.5rem));
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+    background: #202024;
+    border: 1px solid #3a3a42;
+    box-shadow: 0 6px 18px rgb(0 0 0 / 55%);
+  }
+
+  .login label {
+    font-size: 0.75rem;
+    color: #9a9aa0;
+  }
+
+  .login input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.45rem 0.5rem;
+    font-size: 0.85rem;
+    color: inherit;
+    border-radius: 0.4rem;
+    border: 1px solid #34343a;
+    background: #141416;
+    outline: none;
+    user-select: text;
+  }
+
+  .login input:focus {
+    border-color: #4a8cff;
+  }
+
+  .login-error {
+    color: #ff9d9d;
+    font-size: 0.7rem;
+    word-break: break-word;
+    user-select: text;
+  }
+
+  .login-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  .login-actions button {
+    padding: 0.3rem 0.6rem;
+    border: none;
+    border-radius: 0.3rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+
+  .login-actions button[type="button"] {
+    background: transparent;
+    color: #9a9aa0;
+  }
+
+  .login-actions button[type="submit"] {
+    background: #4a8cff;
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .login-actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 </style>

@@ -11,6 +11,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri_plugin_autostart::ManagerExt;
 
 mod db;
+mod supabase;
 
 #[cfg(target_os = "linux")]
 mod tray_linux;
@@ -44,6 +45,49 @@ fn save_state(
 ) -> Result<db::Store, String> {
     let mut conn = state.0.lock().map_err(|e| e.to_string())?;
     db::save_state(&mut conn, store).map_err(|e| e.to_string())
+}
+
+/// Diz se há uma conta conectada e qual é.
+#[tauri::command]
+fn auth_status(state: tauri::State<DbState>) -> Result<Option<supabase::AuthInfo>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let session = supabase::load_session(&conn).map_err(|e| e.to_string())?;
+    Ok(session.map(supabase::AuthInfo::from))
+}
+
+/// Dados para o frontend abrir o canal de Realtime do usuário conectado.
+#[tauri::command]
+fn realtime_config(
+    state: tauri::State<DbState>,
+) -> Result<Option<supabase::RealtimeConfig>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    supabase::realtime_config(&conn)
+}
+
+/// Entra com email/senha e guarda os tokens. A senha nunca é persistida: só a
+/// sessão (tokens) fica no banco local.
+#[tauri::command]
+async fn sign_in(
+    state: tauri::State<'_, DbState>,
+    email: String,
+    password: String,
+) -> Result<supabase::AuthInfo, String> {
+    let cfg = supabase::config().ok_or_else(|| "sync não configurado".to_string())?;
+    supabase::sign_in_and_store(&cfg, &state.0, &email, &password).await
+}
+
+/// Esquece a sessão local (não mexe nos dados do servidor).
+#[tauri::command]
+fn sign_out(state: tauri::State<DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    supabase::clear_session(&conn).map_err(|e| e.to_string())
+}
+
+/// Dispara um ciclo de sincronização (pull → merge → push).
+#[tauri::command]
+async fn sync_now(state: tauri::State<'_, DbState>) -> Result<supabase::SyncReport, String> {
+    let cfg = supabase::config().ok_or_else(|| "sync não configurado".to_string())?;
+    supabase::sync(&cfg, &state.0).await
 }
 
 #[tauri::command]
@@ -246,6 +290,10 @@ pub fn toggle_window(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Em desenvolvimento as credenciais públicas vêm do `.env`; no app
+    // empacotado valem as embutidas em tempo de compilação (se houver).
+    let _ = dotenvy::dotenv();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -259,7 +307,12 @@ pub fn run() {
             set_width,
             can_self_update,
             load_state,
-            save_state
+            save_state,
+            auth_status,
+            sign_in,
+            sign_out,
+            sync_now,
+            realtime_config
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

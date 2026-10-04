@@ -149,6 +149,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              UPDATE todos SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE created_at IS NULL;
              UPDATE todos SET updated_at = created_at WHERE updated_at IS NULL;
 
+             -- Nada disso nunca foi pro servidor, então tudo começa pendente e
+             -- sobe no primeiro sync.
+             UPDATE tabs  SET dirty = 1;
+             UPDATE todos SET dirty = 1;
+
              CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_uuid  ON tabs(uuid);
              CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_uuid ON todos(uuid);
              CREATE INDEX IF NOT EXISTS idx_tabs_dirty  ON tabs(dirty);
@@ -170,8 +175,17 @@ fn now_brasilia() -> String {
 
 /// Instante atual em UTC com milissegundos. O formato é fixo (`...Z`), então
 /// `updated_at` pode ser comparado como texto entre dispositivos no sync.
-fn now_utc() -> String {
+pub(crate) fn now_utc() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+/// Conexão em memória já migrada, usada pelos testes de outros módulos.
+#[cfg(test)]
+pub(crate) fn memory() -> Connection {
+    let conn = Connection::open_in_memory().expect("abre banco em memória");
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    migrate(&conn).unwrap();
+    conn
 }
 
 /// Lê o estado completo, com os TODOs de cada aba em ordem de inserção.
@@ -798,7 +812,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(uuid.len(), 36);
-        assert_eq!(dirty, 0, "dado antigo não precisa subir: só o que mudar depois");
+        assert_eq!(dirty, 1, "dado antigo sobe no primeiro sync, pois nunca foi enviado");
 
         // O estado lido continua idêntico ao de antes.
         let lido = load_state(&conn).unwrap();
