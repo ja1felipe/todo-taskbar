@@ -1,6 +1,6 @@
 [package]
 name = "todobar"
-version = "0.2.2"
+version = "0.2.3"
 description = "Lista de tarefas na bandeja do sistema, com abas e histórico de conclusão"
 authors = ["João Felipe <ja1felipe@users.noreply.github.com>"]
 edition = "2021"
