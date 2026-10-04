@@ -179,6 +179,17 @@ pub(crate) fn now_utc() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// Quantas linhas locais ainda não subiram para o servidor (abas + TODOs). É o
+/// que a tela mostra enquanto o app está offline ou aguardando sincronizar.
+pub fn pending_count(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM tabs  WHERE dirty = 1)
+              + (SELECT COUNT(*) FROM todos WHERE dirty = 1)",
+        [],
+        |r| r.get(0),
+    )
+}
+
 /// Conexão em memória já migrada, usada pelos testes de outros módulos.
 #[cfg(test)]
 pub(crate) fn memory() -> Connection {
@@ -466,6 +477,19 @@ mod tests {
             text: format!("todo {id}"),
             done,
         }
+    }
+
+    #[test]
+    fn pendentes_conta_abas_e_todos() {
+        let mut conn = mem();
+        assert_eq!(pending_count(&conn).unwrap(), 0, "banco novo não tem pendências");
+
+        save_state(
+            &mut conn,
+            store(vec![tab(1, vec![todo(10, false), todo(11, true)])], 1),
+        )
+        .unwrap();
+        assert_eq!(pending_count(&conn).unwrap(), 3, "1 aba + 2 TODOs pendentes");
     }
 
     #[test]

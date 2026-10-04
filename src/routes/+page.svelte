@@ -101,6 +101,12 @@
   let realtimeUserId: string | null = null;
   let syncQueued = false;
   let syncDebounce: ReturnType<typeof setTimeout> | undefined;
+  // Offline: o que for alterado continua indo pro banco local (com `dirty`) e
+  // sobe quando a conexão voltar.
+  let online = $state(typeof navigator === "undefined" ? true : navigator.onLine);
+  let pendingChanges = $state(0);
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryDelay = 0;
 
   let active = $derived(tabs.find((t) => t.id === activeId) ?? tabs[0]);
   let pending = $derived(active?.todos.filter((t) => !t.done) ?? []);
@@ -108,6 +114,15 @@
   let remaining = $derived(pending.length);
   let isEditing = $derived(editing !== null);
   let canCreate = $derived(tabs.length < MAX_TABS);
+
+  // Texto do botão de sync no rodapé.
+  let syncLabel = $derived.by(() => {
+    if (syncing) return "sincronizando…";
+    if (!online) return pendingChanges > 0 ? `offline · ${pendingChanges}` : "offline";
+    if (syncNote) return syncNote;
+    if (pendingChanges > 0) return `${pendingChanges} p/ subir`;
+    return "sincronizar";
+  });
 
   onMount(async () => {
     const fromDb = await invoke<Store>("load_state").catch(() => null);
@@ -142,11 +157,15 @@
 
     // Sem conta conectada nada acontece; `syncNow` já ignora esse caso.
     await refreshAuth();
+    void refreshPending();
     void setupRealtime();
     void syncNow();
+
     unlistenFocus = await appWindow.onFocusChanged(({ payload: focused }) => {
       if (focused) void syncNow();
     });
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
     syncTimer = setInterval(() => void syncNow(), SYNC_INTERVAL);
   });
 
@@ -154,6 +173,9 @@
     if (updateTimer) clearInterval(updateTimer);
     if (syncTimer) clearInterval(syncTimer);
     if (syncDebounce) clearTimeout(syncDebounce);
+    clearRetry();
+    window.removeEventListener("online", handleOnline);
+    window.removeEventListener("offline", handleOffline);
     unlistenFocus?.();
     void teardownRealtime();
     void pendingUpdate?.close();
@@ -265,6 +287,7 @@
         // O backend pode ter preenchido um `completedAt` que ainda não tínhamos.
         tabs = salvo.tabs;
         activeId = salvo.activeId;
+        void refreshPending();
       })
       .catch((erro) => {
         console.error("não foi possível salvar no banco", erro);
@@ -504,6 +527,9 @@
    */
   async function syncNow() {
     if (!auth) return;
+    // Sem conexão não adianta tentar: as alterações já estão salvas localmente
+    // (com `dirty`) e sobem quando o "online" disparar.
+    if (!online) return;
     // Se um sync já está rodando, marca para repetir ao terminar: um aviso de
     // Realtime que chega no meio de um ciclo não pode ser perdido.
     if (syncing) {
@@ -512,6 +538,7 @@
     }
     syncing = true;
     syncError = false;
+    clearRetry();
     try {
       await fila;
       await invoke("sync_now");
@@ -522,14 +549,17 @@
         activeId = fromDb.activeId;
       }
       syncNote = "sincronizado";
+      retryDelay = 0;
     } catch (error) {
       console.error("não foi possível sincronizar", error);
       syncError = true;
-      syncNote = "falha ao sincronizar";
+      syncNote = "sem conexão";
+      scheduleRetry();
     } finally {
       syncing = false;
       // O Rust é quem renova o token; o canal precisa receber o mais recente.
       void setupRealtime();
+      void refreshPending();
       setTimeout(() => {
         if (!syncError) syncNote = "";
       }, 2500);
@@ -537,6 +567,45 @@
     if (syncQueued) {
       syncQueued = false;
       void syncNow();
+    }
+  }
+
+  /** Quantas alterações locais ainda não subiram (abas + TODOs). */
+  async function refreshPending() {
+    pendingChanges = await invoke<number>("pending_count").catch(() => pendingChanges);
+  }
+
+  function handleOnline() {
+    online = true;
+    retryDelay = 0;
+    clearRetry();
+    void refreshPending();
+    void setupRealtime();
+    void syncNow();
+  }
+
+  function handleOffline() {
+    online = false;
+    clearRetry();
+  }
+
+  /**
+   * Reagenda um sync quando a falha acontece com a rede ainda "online" (ex.:
+   * servidor fora do ar). O intervalo dobra até 60s para não martelar.
+   */
+  function scheduleRetry() {
+    if (retryTimer || !auth || !online) return;
+    retryDelay = retryDelay ? Math.min(retryDelay * 2, 60000) : 5000;
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      void syncNow();
+    }, retryDelay);
+  }
+
+  function clearRetry() {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
     }
   }
 
@@ -573,7 +642,12 @@
       .on("postgres_changes", { event: "*", schema: "public", table: "tabs" }, scheduleSync)
       .on("postgres_changes", { event: "*", schema: "public", table: "todos" }, scheduleSync)
       .subscribe((status) => {
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        if (status === "SUBSCRIBED") {
+          // Conectou (ou reconectou): prova de que há rede, então sincroniza o
+          // que ficou pendente e o que mudou do outro lado enquanto isso.
+          online = true;
+          void syncNow();
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
           console.warn("canal de realtime indisponível", status);
         }
       });
@@ -748,10 +822,12 @@
             class="check"
             class:sync-error={syncError}
             onclick={syncNow}
-            disabled={syncing}
-            title={auth.email ?? auth.userId}
+            disabled={syncing || !online}
+            title={online
+              ? (auth.email ?? auth.userId)
+              : "Sem conexão: as alterações serão enviadas automaticamente"}
           >
-            {syncing ? "sincronizando…" : syncNote || "sincronizar"}
+            {syncLabel}
           </button>
           <button class="check" onclick={signOut}>desconectar</button>
         {:else}

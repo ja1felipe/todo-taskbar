@@ -55,6 +55,13 @@ fn auth_status(state: tauri::State<DbState>) -> Result<Option<supabase::AuthInfo
     Ok(session.map(supabase::AuthInfo::from))
 }
 
+/// Quantas alterações locais ainda não subiram para o servidor.
+#[tauri::command]
+fn pending_count(state: tauri::State<DbState>) -> Result<i64, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::pending_count(&conn).map_err(|e| e.to_string())
+}
+
 /// Dados para o frontend abrir o canal de Realtime do usuário conectado.
 #[tauri::command]
 fn realtime_config(
@@ -312,7 +319,8 @@ pub fn run() {
             sign_in,
             sign_out,
             sync_now,
-            realtime_config
+            realtime_config,
+            pending_count
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
