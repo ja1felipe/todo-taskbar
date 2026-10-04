@@ -288,6 +288,9 @@
         tabs = salvo.tabs;
         activeId = salvo.activeId;
         void refreshPending();
+        // Mudança local: sobe logo (com debounce) para o outro dispositivo
+        // receber pelo Realtime em vez de esperar o próximo ciclo.
+        scheduleSync();
       })
       .catch((erro) => {
         console.error("não foi possível salvar no banco", erro);
