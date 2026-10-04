@@ -83,11 +83,13 @@ async fn sign_in(
     supabase::sign_in_and_store(&cfg, &state.0, &email, &password).await
 }
 
-/// Esquece a sessão local (não mexe nos dados do servidor).
+/// Esquece a sessão local e apaga a cópia local dos dados (não mexe no
+/// servidor). A cópia some junto para trocar de conta sem deixar para trás
+/// linhas da conta anterior.
 #[tauri::command]
 fn sign_out(state: tauri::State<DbState>) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    supabase::clear_session(&conn).map_err(|e| e.to_string())
+    supabase::forget_account(&conn).map_err(|e| e.to_string())
 }
 
 /// Dispara um ciclo de sincronização (pull → merge → push).

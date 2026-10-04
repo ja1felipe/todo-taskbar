@@ -707,6 +707,12 @@
     auth = null;
     syncNote = "";
     syncError = false;
+    clearRetry();
+    // O `sign_out` apaga a cópia local (o servidor mantém). A tela volta ao
+    // estado inicial para não mostrar/persistir dados da conta que saiu.
+    tabs = [{ ...DEFAULT_TAB }];
+    activeId = DEFAULT_TAB.id;
+    pendingChanges = 0;
   }
 
   function hide() {

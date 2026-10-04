@@ -567,6 +567,17 @@ pub fn clear_session(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Esquece a conta **e apaga a cópia local**. O banco local pertence a quem está
+/// logado: se as linhas de uma conta antiga ficassem, no login de outra conta o
+/// primeiro sync tentaria subir os mesmos `uuid` e o upsert bateria na linha do
+/// dono original, que o RLS recusa (a outra conta não pode alterá-la). Os dados
+/// continuam no servidor e voltam no próximo login da conta original.
+pub fn forget_account(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("DELETE FROM todos; DELETE FROM tabs;")?;
+    conn.execute("DELETE FROM meta WHERE key = 'active_id'", [])?;
+    clear_session(conn)
+}
+
 fn set_meta(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -849,5 +860,27 @@ mod tests {
             "2026-01-01T00:00:00.123+00:00",
             "2026-01-01T00:00:00.123Z"
         ));
+    }
+
+    #[test]
+    fn forget_account_apaga_dados_e_sessao() {
+        let mut conn = db::memory();
+        db::save_state(&mut conn, local_store()).unwrap();
+
+        let session = Session {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_at: 0,
+            user_id: "u".into(),
+            email: None,
+        };
+        store_session(&conn, &session).unwrap();
+
+        forget_account(&conn).unwrap();
+
+        let estado = db::load_state(&conn).unwrap();
+        assert!(estado.tabs.is_empty(), "as abas locais somem");
+        assert!(load_session(&conn).unwrap().is_none(), "a sessão some");
+        assert_eq!(db::pending_count(&conn).unwrap(), 0);
     }
 }
