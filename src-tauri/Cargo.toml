@@ -21,21 +21,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# `macos-private-api` é exigida pelo `macOSPrivateApi` do tauri.conf.json, que
-# habilita a janela transparente no macOS. Fora do macOS a feature é inerte.
 # `image-png` decodifica o PNG do ícone da bandeja (`icons/newicon`), que é
-# embutido no binário com `include_bytes!`.
-tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
+# embutido no binário com `include_bytes!`. `macos-private-api` é exigida pelo
+# `macOSPrivateApi` do tauri.conf.json (janela transparente no macOS) e a CLI
+# valida essa correspondência no host, então fica aqui mesmo sendo inerte fora
+# do macOS.
+tauri = { version = "2", features = ["macos-private-api", "image-png"] }
 tauri-plugin-opener = "2"
-# "Abrir ao inicializar": cria/remove a entrada de autostart do sistema
-# (~/.config/autostart no Linux, chave de registro no Windows, LaunchAgent no
-# macOS).
-tauri-plugin-autostart = "2"
-# Atualização in-app: consulta o `latest.json` da última release, baixa o
-# pacote assinado e instala.
-tauri-plugin-updater = "2"
-# Necessário para relançar o app depois de instalar a atualização.
-tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # UUID v4 para identificar cada item entre dispositivos. O `id` inteiro local
@@ -58,6 +50,23 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 # vez de fixar o offset, para a conversão seguir as regras da IANA.
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
+
+# O tray, o autostart e a atualização in-app dependem de APIs do sistema
+# operacional que o Android não expõe, então ficam declarados apenas para as
+# plataformas desktop. No Android o app é atualizado por fora (APK novo no
+# GitHub) e não tem bandeja nem inicialização automática.
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+# "Abrir ao inicializar": cria/remove a entrada de autostart do sistema
+# (~/.config/autostart no Linux, chave de registro no Windows, LaunchAgent no
+# macOS).
+tauri-plugin-autostart = "2"
+# Atualização in-app: consulta o `latest.json` da última release, baixa o
+# pacote assinado e instala.
+tauri-plugin-updater = "2"
+# Necessário para relançar o app depois de instalar a atualização.
+tauri-plugin-process = "2"
 
 # No Linux o tray do Tauri usa apenas StatusNotifierItem (D-Bus), protocolo que
 # não tem evento de botão direito e cujo menu é exibido pelo painel. Para ter o

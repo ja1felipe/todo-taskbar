@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "default-mobile",
+  "description": "Capability principal no Android/iOS: sem tray, sem updater e sem reinício de processo, que não existem nessas plataformas",
+  "platforms": ["android", "iOS"],
+  "windows": ["main"],
+  "permissions": ["core:default", "opener:default"]
+}

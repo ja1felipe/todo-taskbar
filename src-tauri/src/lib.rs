@@ -1,13 +1,20 @@
 use std::sync::Mutex;
+// O `sleep` do auto-hide da janela só existe no desktop.
+#[cfg(desktop)]
 use std::time::Duration;
 
 use rusqlite::Connection;
-use tauri::{AppHandle, LogicalSize, Manager, WindowEvent};
+// `Manager` é usado no mobile por `manage()` e `app.path()`; já `AppHandle`,
+// `LogicalSize` e `WindowEvent` só fazem sentido nas funções de janela, todas
+// anotadas com `#[cfg(desktop)]`.
+use tauri::Manager;
+#[cfg(desktop)]
+use tauri::{AppHandle, LogicalSize, WindowEvent};
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(desktop, not(target_os = "linux")))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(desktop, not(target_os = "linux")))]
 use tauri_plugin_autostart::ManagerExt;
 
 mod db;
@@ -98,12 +105,12 @@ async fn sync_now(state: tauri::State<'_, DbState>) -> Result<supabase::SyncRepo
     let cfg = supabase::config().ok_or_else(|| "sync não configurado".to_string())?;
     supabase::sync(&cfg, &state.0).await
 }
-
+#[cfg(desktop)]
 #[tauri::command]
 fn quit(app: AppHandle) {
     exit_app(&app);
 }
-
+#[cfg(desktop)]
 /// Redimensiona a janela só na horizontal, mantendo a altura e a borda direita
 /// presas no ícone da bandeja. O teto de largura é imposto por
 /// [`configure_resize`] via `set_max_size`, então qualquer valor acima é
@@ -141,12 +148,13 @@ fn can_self_update() -> bool {
     tauri::utils::platform::bundle_type().is_some()
 }
 
+#[cfg(desktop)]
 /// Ícone da bandeja, embutido no binário a partir de `icons/newicon`. Fica
 /// separado do ícone do app/instalador (`bundle.icon` no `tauri.conf.json`).
 fn tray_icon_image() -> tauri::Result<tauri::image::Image<'static>> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/newicon/icon-256x256.png"))
 }
-
+#[cfg(desktop)]
 /// Trava a altura e limita a largura a um quarto da tela, para a janela não
 /// virar uma faixa gigante em monitores largos.
 fn configure_resize(window: &tauri::WebviewWindow) {
@@ -171,11 +179,11 @@ fn configure_resize(window: &tauri::WebviewWindow) {
         let _ = window.set_size(LogicalSize::new(max_width, height));
     }
 }
-
+#[cfg(desktop)]
 pub fn exit_app(app: &AppHandle) {
     app.exit(0);
 }
-
+#[cfg(desktop)]
 pub fn show_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -192,7 +200,7 @@ pub fn show_window(app: &AppHandle) {
 ///
 /// A marca é derivada do estado real do autostart em vez de uma alternância
 /// cega, então continua correta mesmo se a entrada for mexida por fora.
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn toggle_autostart(app: &AppHandle, item: &tauri::menu::CheckMenuItem<tauri::Wry>) {
     let autolaunch = app.autolaunch();
     let enabled = autolaunch.is_enabled().unwrap_or(false);
@@ -213,7 +221,7 @@ fn toggle_autostart(app: &AppHandle, item: &tauri::menu::CheckMenuItem<tauri::Wr
         }
     }
 }
-
+#[cfg(desktop)]
 /// Ancora a janela logo acima do ícone da bandeja, alinhada à borda direita
 /// dele. Se o painel não informar a posição do ícone, cai para o canto do
 /// monitor.
@@ -257,7 +265,7 @@ fn position_above_icon(
         .set_position(tauri::PhysicalPosition::new(x, y))
         .is_ok()
 }
-
+#[cfg(desktop)]
 /// Ancora a janela no canto inferior direito da *área útil* do monitor (usado
 /// quando a posição do ícone não está disponível).
 ///
@@ -284,7 +292,7 @@ fn position_in_work_area(window: &tauri::WebviewWindow) {
 
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
-
+#[cfg(desktop)]
 pub fn toggle_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -303,17 +311,32 @@ pub fn run() {
     // empacotado valem as embutidas em tempo de compilação (se houver).
     let _ = dotenvy::dotenv();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+
+    // Tray, autostart e os plugins de atualização/reinício dependem de APIs que
+    // só existem no desktop. Montar o builder por etapas (em vez de encadear
+    // `.plugin(...)` com `#[cfg]` nos argumentos) deixa cada `if` inteiro
+    // Some quando o alvo é mobile, em vez de virar uma chamada vazia.
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                None,
+            ))
+            .plugin(tauri_plugin_process::init())
+            .plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    builder
         .invoke_handler(tauri::generate_handler![
+            // Comandos que dependem de janela/bandeja: só existem no desktop,
+            // então o frontend Android nunca os chama.
+            #[cfg(desktop)]
             quit,
+            #[cfg(desktop)]
             set_width,
+            #[cfg(desktop)]
             can_self_update,
             load_state,
             save_state,
@@ -325,6 +348,7 @@ pub fn run() {
             pending_count
         ])
         .setup(|app| {
+            #[cfg(desktop)]
             if let Some(window) = app.get_webview_window("main") {
                 configure_resize(&window);
             }
@@ -339,6 +363,7 @@ pub fn run() {
             let conn = db::open(&path).map_err(|e| e.to_string())?;
             app.manage(DbState(Mutex::new(conn)));
 
+            #[cfg(desktop)]
             let tray_icon = tray_icon_image()?;
 
             // No Linux usamos XEmbed (GtkStatusIcon) via FFI, porque o tray do
@@ -347,7 +372,7 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             tray_linux::create(app.handle(), &tray_icon);
 
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(all(desktop, not(target_os = "linux")))]
             {
                 let open = tauri::menu::MenuItem::with_id(app, "open", "Abrir", true, None::<&str>)?;
                 let startup = tauri::menu::CheckMenuItem::with_id(
@@ -391,7 +416,22 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| match event {
+        .on_window_event(on_window_event)
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+/// No mobile a janela é a própria tela do app: não há bandeja para alinhar nem
+/// "perder o foco" que devolva o usuário ao desktop, então o handler é vazio.
+#[cfg(mobile)]
+fn on_window_event(_window: &tauri::Window, _event: &tauri::WindowEvent) {}
+
+/// Oculta a janela quando ela perde o foco e a realinha com o ícone da bandeja
+/// quando o gerenciador de janelas redimensiona. São comportamentos de desktop:
+/// no Android a janela é a própria tela do app.
+#[cfg(desktop)]
+fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
+    match event {
             WindowEvent::Focused(false) => {
                 let app = window.clone();
                 std::thread::spawn(move || {
@@ -430,9 +470,7 @@ pub fn run() {
                 });
             }
             _ => {}
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    }
 }
 
 #[cfg(test)]
