@@ -191,7 +191,7 @@
     if (!Number.isFinite(saved) || saved <= 0) return;
 
     const scale = await appWindow.scaleFactor();
-    void invoke("set_width", { width: Math.round(saved * scale) });
+    void invoke("set_width", { width: Math.round(saved * scale) }).catch(() => {});
   }
 
   /** Salva a largura a cada redimensionamento, para a próxima abertura manter. */
@@ -436,7 +436,7 @@
 
     const onMove = (move: PointerEvent) => {
       const next = width + Math.round((move.clientX - startX) * scale);
-      void invoke("set_width", { width: Math.max(MIN_WIDTH, next) });
+      void invoke("set_width", { width: Math.max(MIN_WIDTH, next) }).catch(() => {});
     };
 
     const stop = (up: PointerEvent) => {
@@ -734,7 +734,7 @@
 
     if (event.key === "q" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      invoke("quit");
+      invoke("quit").catch(() => {});
     }
   }
 
@@ -845,7 +845,7 @@
         <button class="check" onclick={checkForUpdates} disabled={checking}>
           {checking ? "verificando…" : "verificar"}
         </button>
-        <button class="quit" onclick={() => invoke("quit")}>Sair</button>
+        <button class="quit" onclick={() => invoke("quit").catch(() => {})}>Sair</button>
       </span>
     </footer>
   </div>
