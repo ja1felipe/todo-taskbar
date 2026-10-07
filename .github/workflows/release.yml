@@ -233,6 +233,8 @@ jobs:
           ALIAS="${KEY_ALIAS:-todobar}"
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           mkdir -p /tmp/apks
+          # Alinhados ficam fora de /tmp/apks para não serem enviados à release.
+          ALIGNED_DIR="$(mktemp -d)"
           shopt -s nullglob
           for apk in src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk; do
             abi="$(basename "$(dirname "$(dirname "$apk")")")"
@@ -244,7 +246,7 @@ jobs:
               x86_64) out_abi="x86_64" ;;
               *) out_abi="$abi" ;;
             esac
-            aligned="/tmp/apks/${out_abi}-aligned.apk"
+            aligned="$ALIGNED_DIR/${out_abi}-aligned.apk"
             out="/tmp/apks/todo-taskbar_${TAG_NAME}_${out_abi}.apk"
             "$BT/zipalign" -p -f 4 "$apk" "$aligned"
             "$BT/apksigner" sign --ks /tmp/todobar.keystore \
@@ -256,4 +258,4 @@ jobs:
       - name: Anexar APKs à release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG_NAME" /tmp/apks/*.apk --clobber
+        run: gh release upload "$TAG_NAME" /tmp/apks/todo-taskbar_*.apk --clobber
