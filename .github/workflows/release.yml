@@ -177,6 +177,10 @@ jobs:
           key: android
 
       - uses: android-actions/setup-android@v3
+        with:
+          # O default do action é "tools platform-tools", mas o pacote legado
+          # `tools` não existe mais no repositório do SDK e faz o action falhar.
+          packages: 'platform-tools'
 
       - name: Instalar SDK/NDK do Android
         run: |
