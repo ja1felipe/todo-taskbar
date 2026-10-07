@@ -99,6 +99,11 @@
   let supa: SupabaseClient | null = null;
   let channel: RealtimeChannel | null = null;
   let realtimeUserId: string | null = null;
+  // Token com que o canal atual foi autorizado. O RLS do Realtime é avaliado no
+  // subscribe, então ao renovar o token é preciso reconstruir o canal.
+  let realtimeToken: string | null = null;
+  // Marca que o canal caiu; força a reconstrução no próximo `setupRealtime`.
+  let realtimeBroken = false;
   let syncQueued = false;
   let syncDebounce: ReturnType<typeof setTimeout> | undefined;
   // Offline: o que for alterado continua indo pro banco local (com `dirty`) e
@@ -166,6 +171,7 @@
     });
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
+    document.addEventListener("visibilitychange", handleVisibility);
     syncTimer = setInterval(() => void syncNow(), SYNC_INTERVAL);
   });
 
@@ -176,6 +182,7 @@
     clearRetry();
     window.removeEventListener("online", handleOnline);
     window.removeEventListener("offline", handleOffline);
+    document.removeEventListener("visibilitychange", handleVisibility);
     unlistenFocus?.();
     void teardownRealtime();
     void pendingUpdate?.close();
@@ -582,6 +589,8 @@
     online = true;
     retryDelay = 0;
     clearRetry();
+    // O canal provavelmente morreu enquanto esteve offline; reconstrói.
+    realtimeBroken = true;
     void refreshPending();
     void setupRealtime();
     void syncNow();
@@ -590,6 +599,18 @@
   function handleOffline() {
     online = false;
     clearRetry();
+  }
+
+  /**
+   * No mobile o app fica suspenso em segundo plano e o WebSocket morre em
+   * silêncio (sem evento de erro), então o que mudou nesse período não chega.
+   * Ao voltar para a frente, reconstruímos o canal e sincronizamos.
+   */
+  function handleVisibility() {
+    if (document.visibilityState !== "visible") return;
+    realtimeBroken = true;
+    void setupRealtime();
+    void syncNow();
   }
 
   /**
@@ -627,40 +648,84 @@
     if (!supa) {
       // O Supabase aqui só serve para o canal: nada de sessão nem refresh de
       // token no JS, para não competir com o refresh que o Rust já faz.
+      //
+      // `accessToken` é obrigatório: o `supabase-js` sempre injeta no Realtime
+      // um callback que, sem sessão no JS, devolve a anon key e sobrescreve
+      // qualquer `setAuth` a cada heartbeat. Sem passar o token do Rust por
+      // aqui, o RLS avalia o canal como `anon` e os eventos passam a ser
+      // descartados (o canal fica "mudo" alguns segundos após o subscribe).
       supa = createClient(cfg.url, cfg.anon, {
         auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        accessToken: async () => {
+          const atual = await invoke<RealtimeConfig | null>("realtime_config").catch(() => null);
+          return atual?.accessToken ?? "";
+        },
+        realtime: {
+          heartbeatCallback: (status) => {
+            // Conexão caiu em silêncio: tenta reabrir já.
+            if (status === "disconnected") void supa?.realtime.connect();
+          },
+        },
       });
     }
-    await supa.realtime.setAuth(cfg.accessToken);
 
-    if (channel && realtimeUserId === cfg.userId) return;
+    // Reaproveita o canal só se for a mesma conta, com o mesmo token e sem
+    // falha pendente. O RLS do Realtime é avaliado no subscribe, então token
+    // renovado (ou conta trocada) exige reconstruir o canal.
+    if (
+      channel &&
+      !realtimeBroken &&
+      realtimeUserId === cfg.userId &&
+      realtimeToken === cfg.accessToken
+    ) {
+      return;
+    }
 
     if (channel) {
       await supa.removeChannel(channel);
       channel = null;
     }
 
-    channel = supa
+    realtimeToken = cfg.accessToken;
+    realtimeUserId = cfg.userId;
+    realtimeBroken = false;
+
+    const created = supa
       .channel(`todo-taskbar:${cfg.userId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "tabs" }, scheduleSync)
-      .on("postgres_changes", { event: "*", schema: "public", table: "todos" }, scheduleSync)
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          // Conectou (ou reconectou): prova de que há rede, então sincroniza o
-          // que ficou pendente e o que mudou do outro lado enquanto isso.
-          online = true;
-          void syncNow();
-        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          console.warn("canal de realtime indisponível", status);
-        }
-      });
-    realtimeUserId = cfg.userId;
+      .on("postgres_changes", { event: "*", schema: "public", table: "todos" }, scheduleSync);
+
+    // O token precisa estar no payload do `phx_join`. O `supabase-js` chama
+    // `realtime.setAuth()` uma vez dentro do `createClient`, antes deste canal
+    // existir, então o `updateJoinPayload` nunca roda para ele; e o socket pode
+    // enviar o join no open antes do callback async de `accessToken` resolver.
+    // Zeramos o valor em cache e reaplicamos o token para o join já sair
+    // autorizado (com RLS de `auth.uid()`), antes de assinar.
+    supa.realtime.accessTokenValue = null;
+    await supa.realtime.setAuth(cfg.accessToken);
+
+    channel = created;
+    created.subscribe((status) => {
+      // Ignora callbacks de um canal que já foi substituído/descartado.
+      if (channel !== created) return;
+      if (status === "SUBSCRIBED") {
+        // Conectou (ou reconectou): prova de que há rede, então sincroniza o
+        // que ficou pendente e o que mudou do outro lado enquanto isso.
+        online = true;
+        void syncNow();
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        console.warn("canal de realtime indisponível", status);
+        realtimeBroken = true;
+      }
+    });
   }
 
   async function teardownRealtime() {
     if (supa && channel) await supa.removeChannel(channel);
     channel = null;
     realtimeUserId = null;
+    realtimeToken = null;
+    realtimeBroken = false;
   }
 
   /** Vários eventos seguidos viram um único sync (ex.: salvar uma tarefa mexe
@@ -698,7 +763,8 @@
       closeLogin();
       await syncNow();
     } catch (error) {
-      loginError = typeof error === "string" ? error : "não foi possível entrar";
+      console.error("sign_in failed", error);
+      loginError = typeof error === "string" ? error : JSON.stringify(error);
     } finally {
       signingIn = false;
     }
@@ -1450,10 +1516,13 @@
   }
 
   .login-actions button {
-    padding: 0.3rem 0.6rem;
+    width: auto;
+    padding: 0.35rem 0.7rem;
     border: none;
     border-radius: 0.3rem;
-    font-size: 0.78rem;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    white-space: nowrap;
     cursor: pointer;
   }
 

@@ -69,13 +69,14 @@ fn pending_count(state: tauri::State<DbState>) -> Result<i64, String> {
     db::pending_count(&conn).map_err(|e| e.to_string())
 }
 
-/// Dados para o frontend abrir o canal de Realtime do usuário conectado.
+/// Dados para o frontend abrir o canal de Realtime do usuário conectado. Renova
+/// o token se necessário, para o Realtime autorizar (RLS) o canal corretamente.
 #[tauri::command]
-fn realtime_config(
-    state: tauri::State<DbState>,
+async fn realtime_config(
+    state: tauri::State<'_, DbState>,
 ) -> Result<Option<supabase::RealtimeConfig>, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    supabase::realtime_config(&conn)
+    let cfg = supabase::config().ok_or_else(|| "sync não configurado".to_string())?;
+    supabase::realtime_config_fresh(&cfg, &state.0).await
 }
 
 /// Entra com email/senha e guarda os tokens. A senha nunca é persistida: só a

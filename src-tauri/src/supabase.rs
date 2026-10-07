@@ -34,18 +34,13 @@ pub struct Config {
     pub anon: String,
 }
 
-/// Lê a configuração do ambiente (carregado do `.env` em desenvolvimento) ou,
-/// como fallback, do valor embutido em tempo de compilação.
+/// Lê a configuração. O ambiente (carregado do `.env` em desenvolvimento pelo
+/// `dotenvy`) tem prioridade; como fallback valem os valores embutidos em tempo
+/// de compilação pelo `build.rs` (`*_BUILD`), que é o que faz o app funcionar no
+/// mobile, onde não existe `.env` em runtime.
 pub fn config() -> Option<Config> {
-    let url = env_or_build("SUPABASE_URL", option_env!("SUPABASE_URL")).or_else(|| {
-        std::env::var("SUPABASE_API").ok().map(|u| {
-            u.trim_end_matches('/')
-                .trim_end_matches("/rest/v1")
-                .trim_end_matches('/')
-                .to_string()
-        })
-    })?;
-    let anon = env_or_build("SUPABASE_ANON_KEY", option_env!("SUPABASE_ANON_KEY"))?;
+    let url = env_or_build("SUPABASE_URL", option_env!("SUPABASE_URL_BUILD"))?;
+    let anon = env_or_build("SUPABASE_ANON_KEY", option_env!("SUPABASE_ANON_KEY_BUILD"))?;
     let url = url.trim_end_matches('/').to_string();
     if url.is_empty() || anon.is_empty() {
         return None;
@@ -57,7 +52,7 @@ fn env_or_build(key: &str, build: Option<&'static str>) -> Option<String> {
     std::env::var(key)
         .ok()
         .filter(|v| !v.is_empty())
-        .or_else(|| build.map(str::to_string))
+        .or_else(|| build.filter(|v| !v.is_empty()).map(str::to_string))
 }
 
 /// Sessão persistida localmente. O `refresh_token` permite renovar o acesso sem
@@ -536,18 +531,25 @@ pub fn load_session(conn: &Connection) -> rusqlite::Result<Option<Session>> {
     }))
 }
 
-/// Monta os dados de Realtime do usuário conectado, ou `None` se não há sessão
-/// (ou se o sync não está configurado). A senha nunca entra aqui.
-pub fn realtime_config(conn: &Connection) -> Result<Option<RealtimeConfig>, String> {
-    let Some(cfg) = config() else {
+/// Monta os dados de Realtime do usuário conectado, renovando o `access_token`
+/// se estiver perto de expirar. A leitura crua não basta: o Realtime autoriza o
+/// canal (RLS) com o JWT informado, então um token vencido derruba os eventos.
+/// `None` quando não há sessão. A senha nunca entra aqui.
+pub async fn realtime_config_fresh(
+    cfg: &Config,
+    db: &Mutex<Connection>,
+) -> Result<Option<RealtimeConfig>, String> {
+    let session = {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        load_session(&conn).map_err(|e| e.to_string())?
+    };
+    let Some(session) = session else {
         return Ok(None);
     };
-    let Some(session) = load_session(conn).map_err(|e| e.to_string())? else {
-        return Ok(None);
-    };
+    let session = ensure_fresh(cfg, db, session).await?;
     Ok(Some(RealtimeConfig {
-        url: cfg.url,
-        anon: cfg.anon,
+        url: cfg.url.clone(),
+        anon: cfg.anon.clone(),
         access_token: session.access_token,
         user_id: session.user_id,
     }))
@@ -614,20 +616,53 @@ pub async fn sign_in_and_store(
     Ok(session.into())
 }
 
+/// Serializa a renovação de sessão. O `refresh_token` do Supabase é rotativo e
+/// usar o mesmo em duas renovações concorrentes invalida a sessão. Como o
+/// `sync` e o canal de Realtime (via [`realtime_config_fresh`]) podem renovar
+/// ao mesmo tempo, a proteção é necessária.
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Devolve a sessão pronta para uso, renovando com folga se estiver perto de
+/// expirar.
+async fn ensure_fresh(
+    cfg: &Config,
+    db: &Mutex<Connection>,
+    session: Session,
+) -> Result<Session, String> {
+    if !is_expiring(&session) {
+        return Ok(session);
+    }
+
+    let _guard = REFRESH_LOCK.lock().await;
+    // Outra chamada pode ter renovado enquanto esperávamos o lock; relê antes de
+    // gastar o `refresh_token`.
+    let current = {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        load_session(&conn).map_err(|e| e.to_string())?
+    }
+    .ok_or_else(|| "não autenticado".to_string())?;
+    if !is_expiring(&current) {
+        return Ok(current);
+    }
+
+    let renewed = refresh(cfg, &current.refresh_token).await?;
+    {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        store_session(&conn, &renewed).map_err(|e| e.to_string())?;
+    }
+    Ok(renewed)
+}
+
 /// Um ciclo completo: pull → merge → push. O lock do banco fica preso apenas em
 /// pequenos trechos, nunca durante as chamadas de rede.
 pub async fn sync(cfg: &Config, db: &Mutex<Connection>) -> Result<SyncReport, String> {
-    let mut session = {
+    let session = {
         let conn = db.lock().map_err(|e| e.to_string())?;
         load_session(&conn).map_err(|e| e.to_string())?
     }
     .ok_or_else(|| "não autenticado".to_string())?;
 
-    if is_expiring(&session) {
-        session = refresh(cfg, &session.refresh_token).await?;
-        let conn = db.lock().map_err(|e| e.to_string())?;
-        store_session(&conn, &session).map_err(|e| e.to_string())?;
-    }
+    let session = ensure_fresh(cfg, db, session).await?;
 
     // Primeiro sync deste banco: tudo que existe localmente ainda não foi pro
     // servidor (mesmo que o `dirty` tenha sido zerado por uma migração antiga),

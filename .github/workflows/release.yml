@@ -123,6 +123,15 @@ jobs:
             - `*.dmg` — arraste o `Todo Taskbar.app` para a pasta Aplicativos
             - `*.app.tar.gz` — pacote portátil
 
+            ### Android
+            - `todo-taskbar_<tag>_arm64-v8a.apk` — celulares Android modernos (recomendado)
+            - `todo-taskbar_<tag>_armeabi-v7a.apk` — celulares 32-bit mais antigos
+            - `todo-taskbar_<tag>_x86_64.apk` / `x86` — emuladores
+
+            Baixe o APK da arquitetura do aparelho e instale (habilite "instalar
+            apps de fontes desconhecidas"). A assinatura é própria, não é da Play
+            Store, então o Android pode pedir confirmação.
+
             Os instaladores não têm assinatura de plataforma (certificado de
             desenvolvedor). No macOS, o Gatekeeper vai avisar: *Ajustes do
             Sistema → Privacidade e Segurança → Abrir mesmo assim*. As
@@ -132,3 +141,115 @@ jobs:
           prerelease: false
           # Gera o latest.json que o updater in-app consulta.
           includeUpdaterJson: true
+
+  # Gera os APKs Android (release, por ABI), assina e anexa à release criada
+  # acima. O projeto `gen/android` não é versionado; é recriado aqui com
+  # `tauri android init`.
+  android:
+    name: Android APK
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG_NAME: ${{ inputs.tag || github.ref_name }}
+      NDK_VERSION: '28.2.13676358'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: android
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Instalar SDK/NDK do Android
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0" \
+            "build-tools;37.0.0" \
+            "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Dependências do frontend
+        run: npm ci
+
+      - name: Gerar projeto Android
+        run: npx tauri android init --ci --skip-targets-install
+
+      - name: Build dos APKs (release, por ABI)
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+        run: npm run tauri -- android build --apk --split-per-abi
+
+      - name: Preparar keystore de assinatura
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > /tmp/todobar.keystore
+          else
+            keytool -genkeypair -keystore /tmp/todobar.keystore -alias todobar \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass todobar -keypass todobar \
+              -dname "CN=Todo Taskbar, O=ja1felipe, C=BR"
+            echo "::warning title=Keystore efêmero::Configure o secret ANDROID_KEYSTORE_BASE64 para assinatura estável; sem ele cada release exige reinstalar o app."
+          fi
+
+      - name: Assinar APKs
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KS_PASS="${KEYSTORE_PASSWORD:-todobar}"
+          KEY_PASS="${KEY_PASSWORD:-todobar}"
+          ALIAS="${KEY_ALIAS:-todobar}"
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          mkdir -p /tmp/apks
+          shopt -s nullglob
+          for apk in src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk; do
+            abi="$(basename "$(dirname "$(dirname "$apk")")")"
+            [ "$abi" = "universal" ] && continue
+            case "$abi" in
+              arm64) out_abi="arm64-v8a" ;;
+              arm)   out_abi="armeabi-v7a" ;;
+              x86)   out_abi="x86" ;;
+              x86_64) out_abi="x86_64" ;;
+              *) out_abi="$abi" ;;
+            esac
+            aligned="/tmp/apks/${out_abi}-aligned.apk"
+            out="/tmp/apks/todo-taskbar_${TAG_NAME}_${out_abi}.apk"
+            "$BT/zipalign" -p -f 4 "$apk" "$aligned"
+            "$BT/apksigner" sign --ks /tmp/todobar.keystore \
+              --ks-pass "pass:$KS_PASS" --key-pass "pass:$KEY_PASS" \
+              --ks-key-alias "$ALIAS" --out "$out" "$aligned"
+          done
+          ls -la /tmp/apks
+
+      - name: Anexar APKs à release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG_NAME" /tmp/apks/*.apk --clobber

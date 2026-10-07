@@ -1,6 +1,6 @@
 [package]
 name = "todobar"
-version = "0.2.4"
+version = "0.2.5"
 description = "Lista de tarefas na bandeja do sistema, com abas e histórico de conclusão"
 authors = ["João Felipe <ja1felipe@users.noreply.github.com>"]
 edition = "2021"
@@ -19,6 +19,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Carrega o `.env` também no build, para embutir as credenciais públicas no
+# binário (necessário no mobile, onde não existe `.env` em runtime).
+dotenvy = "0.15"
 
 [dependencies]
 # `image-png` decodifica o PNG do ícone da bandeja (`icons/newicon`), que é
@@ -30,14 +33,22 @@ tauri = { version = "2", features = ["macos-private-api", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Só o `sync` (mutex assíncrono), usado para serializar a renovação do token:
+# o `refresh_token` do Supabase gira a cada uso e duas renovações concorrentes
+# com o mesmo token derrubariam a sessão.
+tokio = { version = "1", features = ["sync"] }
 # UUID v4 para identificar cada item entre dispositivos. O `id` inteiro local
 # continua sendo a identidade que o frontend já conhece.
 uuid = { version = "1", features = ["v4"] }
 
 # Cliente HTTP para o Supabase (GoTrue/PostgREST). `rustls-tls` evita depender
 # do OpenSSL do sistema, o que facilita o build multiplataforma (e o Android no
-# futuro).
-reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+# futuro). Ficamos no reqwest 0.12 de propósito: no 0.13 a feature `rustls` usa
+# o `rustls-platform-verifier`, que no Android exige inicialização por JNI
+# (contexto da Activity) que o Tauri não faz, e todo HTTPS falha. O 0.12 usa
+# `webpki-roots` (raízes Mozilla embutidas) e funciona no Android sem essa
+# inicialização.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Carrega o `.env` em desenvolvimento, para as credenciais não ficarem embutidas
 # no binário.
 dotenvy = "0.15"
