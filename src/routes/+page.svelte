@@ -130,6 +130,13 @@
   });
 
   onMount(async () => {
+    // O WebView do Android desenha atrás das barras de status e navegação
+    // (edge-to-edge). Marcamos o <html> para colorir essa faixa; o CSS então
+    // desloca o app para fora das barras usando `env(safe-area-inset-*)`.
+    if (/Android/i.test(navigator.userAgent)) {
+      document.documentElement.classList.add("android");
+    }
+
     const fromDb = await invoke<Store>("load_state").catch(() => null);
 
     let imported: Store | null = null;
@@ -1030,6 +1037,13 @@
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
   }
 
+  /* No Android o app fica edge-to-edge; esta cor preenche a faixa atrás das
+     barras do sistema. No desktop o fundo continua transparente. */
+  :global(html.android),
+  :global(html.android body) {
+    background: #1c1c1e;
+  }
+
   main {
     /* `inset` em vez de `margin` + `calc(100vh - 12px)`: a conta com vh fecha
        exatamente no limite da viewport, então qualquer arredondamento sub-pixel
@@ -1040,6 +1054,11 @@
     --edge: calc(-1 * var(--pad) - 1px);
     position: fixed;
     inset: 6px;
+    /* No Android (edge-to-edge) recuamos o app para fora da barra de status e
+       dos botões de navegação; no desktop as safe-areas são 0 e sobram os 6px.
+       A segunda linha cai no primeiro valor se `env()` não for suportado. */
+    inset: max(6px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right))
+      max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
     box-sizing: border-box;
     display: flex;
     flex-direction: row;
@@ -1230,7 +1249,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 0.15rem max(env(safe-area-inset-bottom), 0.15rem) 0.15rem;
+    padding: 0 0.15rem 0.15rem;
     font-size: 0.8rem;
     color: #6e6e76;
   }
